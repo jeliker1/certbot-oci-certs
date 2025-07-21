@@ -6,7 +6,7 @@ Oracle Cloud Infrastructure (OCI) Installer plugin for Certbot.
 This plugin automates the process of installing a certificate acquired by certbot
 into OCI Certificates Management Service.
 
-For more information on the OCI Certificates service pleae see the official documentation at
+For more information on the OCI Certificates service please see the official documentation at
 https://docs.oracle.com/en-us/iaas/Content/certificates/home.htm
 
 Configuration:
@@ -22,21 +22,16 @@ To use this installer you will need:
 Installation
 ------------
 
-I haven't published this in PyPI yet. So for the time being you need to install from source.
+This package is now published `on PyPi`_, which makes installation super easy. From your command line:
+
+.. _on PyPi: https://pypi.org/project/certbot-oci-certs/
+
+
 
 ::
 
-    git clone git@github.com:therealcmj/certbot-oci-certs.git
-    cd certbot-oci-certs
-    pip install .
+    pip install certbot-oci-certs
 
-
-or
-
-::
-
-    git clone git@github.com:therealcmj/certbot-oci-certs.git
-    pip install ./certbot-oci-certs
 
 
 Development

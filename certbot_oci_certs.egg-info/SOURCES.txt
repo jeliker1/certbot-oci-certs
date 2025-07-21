@@ -1,3 +1,4 @@
+LICENSE.txt
 README.rst
 setup.py
 certbot_oci_certs/__init__.py
