@@ -60,8 +60,15 @@ class OCIInstaller(common.Plugin, interfaces.Installer):
                     "signer": None,
                 }
             case "instance":
-                self.credentials = {
-                    "config": None,
+                import os
+                config_file = os.getenv("OCI_CLI_CONFIG_FILE")
+                self.credentials = { #even instance principal needs basic details e.g. tenancy, region
+                    "config": oci.config.from_file( 
+                        file_location=config_file,
+                        profile_name=self.conf('profile')
+                    ) if config_file else oci.config.from_file(
+                        profile_name=self.conf('profile')
+                    ), 
                     "signer": oci.auth.signers.InstancePrincipalsSecurityTokenSigner(),
                 }
 
@@ -127,12 +134,12 @@ class OCIInstaller(common.Plugin, interfaces.Installer):
             #       This seems OK to me at this point. But I am willing to be convinced otherwise.
             #       If you are reading this and have an opinion you know how to find me.
             logger.debug("Looking for existing certificate with OCID {}".format(certificate_id))
-            response = self.certificates_management_client.get_certificate(certificate_id)
-            logger.debug("Returned from getting certificate.")
-
-            if len(response.data.items) != 1:
+            try:
+                response = self.certificates_management_client.get_certificate(certificate_id)
+                logger.debug("Returned from getting certificate.")
+            except oci.exceptions.ServiceError as e: #if we don't find the provided certificate_id
                 import json
-                logger.error("Failed to locate certificate. Response data: {}".format(json.dumps(oci.util.to_dict(response.data))))
+                logger.error("Failed to locate certificate. Response data: {}".format(json.dumps(oci.util.to_dict(str(e)))))
                 raise PluginError(Exception("Failure attempting to locate certificate with specified OCID {}".format(certificate_id)))
 
             # NOTE: we don't set self.compartment_id or self.certificate_name because we're ***NOT***
@@ -144,7 +151,7 @@ class OCIInstaller(common.Plugin, interfaces.Installer):
         # 3. they provided the compartment OCID and a name for the certificate
         #    in which case we have to go find the existing cert with that name.
         #    Q: should we scold them and tell them to use the OCID because that's more performant?
-        if compartment_id:
+        elif compartment_id: # certificate_id was not provided so check for compartment_id, certificate_name
             self.compartment_id = compartment_id
             if not certificate_name:
                 # NOTE: I was going to let this fall through and list certificates in the compartment.
@@ -166,6 +173,7 @@ class OCIInstaller(common.Plugin, interfaces.Installer):
                     # there had better be either zero or only one!
                     if len(response.data.items) == 0:
                         logger.info("Did not find certificate with name '{}'. The certificate will be uploaded as a new certificate to compartment {} with that name".format(certificate_name,compartment_id))
+                        self.certificate_name = certificate_name
 
                     elif len(response.data.items) == 1:
                         logger.debug("Getting certificate OCID from response data")
@@ -256,9 +264,13 @@ class OCIInstaller(common.Plugin, interfaces.Installer):
 
             # name = "certbot-imported-cert-" + domain
 
-            name = domain
-            logger.debug("Automatically generated certificate name '{}'.".format(name))
-
+            if self.certificate_name:
+                name = self.certificate_name
+                logger.debug("Supplied certificate name '{}'.".format(name))
+            else:
+                name = domain
+                logger.debug("Automatically generated certificate name '{}'.".format(name))
+            
             _details['name'] = name
             _details['compartmentId'] = self.compartment_id
             _details['description'] = "Certificate created via import using the certbot OCI Certificate Installer plugin"
