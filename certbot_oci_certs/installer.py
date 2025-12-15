@@ -37,6 +37,7 @@ class OCIInstaller(common.Plugin, interfaces.Installer):
         add("compartment-id",help="Compartment OCID")
         add("certificate-id",help="Certificate OCID")
         add("certificate-name",help="Certificate Name")
+        add("required-seconds-newer",help="Required seconds newer for the certificate to be uploaded as a new version. Default is 0 (always renew).", **{"default":0, "type":int})
 
         add('auth-mode', help='Authentication mode - one of "configfile", "instance", "cloudshell"',
             **{
@@ -51,6 +52,8 @@ class OCIInstaller(common.Plugin, interfaces.Installer):
 
     def __init__(self, *args, **kwargs):
         super(OCIInstaller, self).__init__(*args, **kwargs)
+
+        self.required_seconds_newer = self.conf("required-seconds-newer")
 
         # then initialize the SDK
         match self.conf('auth-mode'):
@@ -104,6 +107,7 @@ class OCIInstaller(common.Plugin, interfaces.Installer):
         compartment_id = self.conf("compartment-id")
         certificate_id = self.conf("certificate-id")
         certificate_name = self.conf("certificate-name")
+        self.validity_not_after = None #initialize and will update if existing cert found
 
 
         # before we try to do anything we need to figure out the current situation vis a vis the cert in certs service
@@ -138,6 +142,7 @@ class OCIInstaller(common.Plugin, interfaces.Installer):
             # NOTE: we don't set self.compartment_id or self.certificate_name because we're ***NOT***
             #       going to move the existing certificate or change its name.
             self.certificate_id = certificate_id
+            self.validity_not_after = response.data.items[0].current_version.validity.time_of_validity_not_after
 
         # 2. they provided the compartment OCID (but no name for the certificate)
         #    in which case we're going to make one up
@@ -170,6 +175,8 @@ class OCIInstaller(common.Plugin, interfaces.Installer):
                     elif len(response.data.items) == 1:
                         logger.debug("Getting certificate OCID from response data")
                         self.certificate_id = response.data.items[0].id
+                        self.validity_not_after = response.data.items[0].current_version_summary.validity.time_of_validity_not_after
+
                         logger.info("Existing certificate with name {} in compartment {} found. Certificate OCID is {}".format(certificate_name, compartment_id, certificate_id))
 
                     else:
@@ -223,16 +230,34 @@ class OCIInstaller(common.Plugin, interfaces.Installer):
         _details['certificateConfig']['privateKeyPem'] = readFile(key_path)
         _details['certificateConfig']['certificatePem'] = readFile(cert_path)
 
+        from cryptography import x509
+        from cryptography.hazmat.primitives.serialization import Encoding
+
+        cert = x509.load_pem_x509_certificate(_details['certificateConfig']['certificatePem'].encode('utf-8'))
+        local_cert_not_after = cert.not_valid_after_utc
+        local_cert_seconds_newer = (local_cert_not_after - self.validity_not_after).total_seconds() if self.validity_not_after else 0 #default zero to force upload
+
         response = None
 
         if self.certificate_id:
             logger.info("Preparing certificate as new version of existing certificate with OCID {}".format(self.certificate_id))
 
-            response = self.certificates_management_client.update_certificate(
-                certificate_id=self.certificate_id,
-                update_certificate_details=_details,
-                **{}
-            )
+            logger.debug(f"OCI cert Validity Not After: {self.validity_not_after}")
+            logger.debug(f"Local cert Validity Not After: {local_cert_not_after}")
+            logger.debug(f"Local cert seconds newer: {local_cert_seconds_newer}")
+
+            if local_cert_seconds_newer >= self.required_seconds_newer:
+                logger.info("Local certificate is newer by {} seconds which meets the required {} seconds newer threshold. Uploading new certificate version.".format(local_cert_seconds_newer, self.required_seconds_newer))
+
+                response = self.certificates_management_client.update_certificate(
+                    certificate_id=self.certificate_id,
+                    update_certificate_details=_details,
+                    **{}
+                )
+            else:
+                logger.info("Local certificate is newer by {} seconds which does NOT meet the required {} seconds newer threshold. Skipping upload of new certificate version.".format(local_cert_seconds_newer, self.required_seconds_newer))
+                response = type('Response', (), {})()  # Creates an empty object
+                response.data = {}
 
             logger.debug("Back from update call")
 
